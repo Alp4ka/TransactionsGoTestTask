@@ -5,7 +5,6 @@ import (
 	"log"
 	"net/http"
 	"server/pkg/app/middleware"
-	"server/pkg/app/models"
 	"server/pkg/app/services"
 )
 
@@ -33,9 +32,6 @@ func (trServer *TransactionServer) Run() {
 
 	// Configuring middleware
 	handler := middleware.LoggingMiddleware(trServer.mux)
-
-	// Process requests
-	go trServer.service.ProcessDbTransactions([]models.TransactionStatus{models.Failed, models.Created})
 
 	log.Fatal(http.ListenAndServe(trServer.Domain(), handler))
 }

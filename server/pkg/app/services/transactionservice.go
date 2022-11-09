@@ -86,7 +86,7 @@ func (ts *TransactionService) GetAllTransactions() ([]models.Transaction, error)
 	return transactions, err
 }
 
-func (ts *TransactionService) ProcessDbTransactions(statusList []models.TransactionStatus) {
+func (ts *TransactionService) process(statusList []models.TransactionStatus) {
 	collectTransactions := func() {
 		_ = ts.connect()
 		t := `SELECT * FROM "transaction" WHERE status='%s';`
@@ -95,8 +95,8 @@ func (ts *TransactionService) ProcessDbTransactions(statusList []models.Transact
 			var transactions []models.Transaction
 			_ = ts.db.Select(&transactions, fmt.Sprintf(t, status))
 			for _, transaction := range transactions {
-				ts.queue <- transaction
 				log.Printf("To queue: %s\n", transaction)
+				ts.queue <- transaction
 			}
 		}
 	}
@@ -105,9 +105,13 @@ func (ts *TransactionService) ProcessDbTransactions(statusList []models.Transact
 		go collectTransactions()
 		go func() {
 			for transaction := range ts.queue {
-				_ = ts.updateTransaction(transaction.Id, models.Success)
+				err := ts.processTransaction(transaction)
+				if err != nil {
+					log.Println(err.Error())
+				}
 			}
 		}()
+
 		time.Sleep(time.Millisecond * 100)
 	}
 }
@@ -151,6 +155,79 @@ func (ts *TransactionService) connect() error {
 	}
 
 	return err
+}
+
+// This method makes me feel upset - I have to deal smh with these inner variances.
+// But... :)
+func (ts *TransactionService) processTransaction(transaction models.Transaction) error {
+	getBalanceById := func(id int) (models.Balance, error) {
+		err := ts.connect()
+		if err != nil {
+			return models.Balance{}, err
+		}
+
+		var balances []models.Balance
+		t := `SELECT * FROM "balance" WHERE id=%d;`
+		err = ts.db.Select(&balances, fmt.Sprintf(t, id))
+
+		if len(balances) == 1 {
+			return balances[0], nil
+		}
+		return models.Balance{}, err
+	}
+
+	setBalance := func(id int, balance float64) error {
+		err := ts.connect()
+		if err != nil {
+			return err
+		}
+
+		t := `
+		UPDATE "balance" SET balance=$1
+  		WHERE id=$2;
+		`
+		_, err = ts.db.Exec(t, balance, id)
+
+		return err
+	}
+
+	fromBalance, err := getBalanceById(transaction.FromBalance)
+	if err != nil {
+		_ = ts.updateTransaction(transaction.Id, models.Cancelled)
+		return xerrors.New("Sender balance does not exist!")
+	}
+
+	toBalance, err := getBalanceById(transaction.ToBalance)
+	if err != nil {
+		_ = ts.updateTransaction(transaction.Id, models.Cancelled)
+		return xerrors.New("Receiver balance does not exist!")
+	}
+
+	// Так читаемее.
+	if !(fromBalance.Currency == toBalance.Currency && fromBalance.Currency == transaction.Currency) {
+		_ = ts.updateTransaction(transaction.Id, models.Cancelled)
+		return xerrors.New("Wrong currency!")
+	}
+
+	if fromBalance.Balance < transaction.Value {
+		_ = ts.updateTransaction(transaction.Id, models.Cancelled)
+		return xerrors.New("Not enough money!")
+	}
+
+	err = setBalance(fromBalance.Id, fromBalance.Balance-transaction.Value)
+	if err != nil {
+		_ = ts.updateTransaction(transaction.Id, models.Failed)
+		return err
+	}
+
+	err = setBalance(toBalance.Id, toBalance.Balance+transaction.Value)
+	if err != nil {
+		_ = ts.updateTransaction(transaction.Id, models.Failed)
+		return err
+	}
+
+	_ = ts.updateTransaction(transaction.Id, models.Success)
+	return nil
 }
 
 func NewTransactionService() *TransactionService {
@@ -204,5 +281,9 @@ func NewTransactionService() *TransactionService {
 	transactionService.dbPassword = pgsPassword
 	transactionService.dbName = pgsDbName
 	transactionService.queue = make(chan models.Transaction)
+
+	// Process requests
+	go transactionService.process([]models.TransactionStatus{models.Failed, models.Created})
+
 	return transactionService
 }

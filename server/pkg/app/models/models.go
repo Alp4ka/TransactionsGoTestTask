@@ -25,6 +25,13 @@ type Transaction struct {
 	Status      TransactionStatus `db:"status"`
 }
 
+type Balance struct {
+	Id       int     `db:"id"`
+	User     int     `db:"user"`
+	Currency string  `db:"currency"`
+	Balance  float64 `db:"balance"`
+}
+
 type TransactionRequest struct {
 	FromBalance int
 	ToBalance   int
