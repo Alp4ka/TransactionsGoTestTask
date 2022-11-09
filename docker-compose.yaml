@@ -1,0 +1,14 @@
+version: "3.9"
+
+services:
+  postgres:
+    image: postgres:13.3
+    environment:
+      POSTGRES_DB: "tr_db"
+      POSTGRES_USER: "tr_service"
+      POSTGRES_PASSWORD: "trpwd123"
+    volumes:
+      - ./db:/docker-entrypoint-initdb.d
+      - ./postgres-data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
